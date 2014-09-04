@@ -87,12 +87,14 @@ class Space(models.Model):
     LOM = 'LOM'
     NFS = 'NFS'
     PIPELINE_LOCAL_FS = 'PIPE_FS'
+    SWIFT = 'SWIFT'
     ACCESS_PROTOCOL_CHOICES = (
         (FEDORA, "FEDORA via SWORD2"),
         (LOCAL_FILESYSTEM, "Local Filesystem"),
         (LOM, "LOCKSS-o-matic"),
         (NFS, "NFS"),
         (PIPELINE_LOCAL_FS, "Pipeline Local Filesystem"),
+        (SWIFT, "Swift"),
     )
     access_protocol = models.CharField(max_length=8,
         choices=ACCESS_PROTOCOL_CHOICES,
