@@ -24,6 +24,14 @@ class TestSwift(TestCase):
         if self.swift_object.auth_version in ("2", "2.0", 2):
             assert self.swift_object.tenant
 
+    @vcr.use_cassette('locations/fixtures/vcr_cassettes/swift_browse.yaml')
+    def test_browse(self):
+        # Should work when browsing directories with or without trailing /
+        resp = self.swift_object.browse('/transfer/SampleTransfers')
+        assert resp
+        assert resp['directories'] == ['Images']
+        assert resp['entries'] == ['BagTransfer.zip', 'Images']
+
     @vcr.use_cassette('locations/fixtures/vcr_cassettes/swift_move_to.yaml')
     def test_move_to_ss(self):
         self.swift_object.move_to_storage_service('/test.txt', 'test.txt', None)
