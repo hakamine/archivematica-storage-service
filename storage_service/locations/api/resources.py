@@ -515,7 +515,7 @@ class PackageResource(ModelResource):
         self.log_throttled_access(request)
         response_json = json.dumps(response)
         return http.HttpResponse(status=status_code, content=response_json,
-            mimetype='application/json')
+            content_type='application/json')
 
     @_custom_endpoint(expected_methods=['get'])
     def extract_file_request(self, request, bundle, **kwargs):
@@ -631,7 +631,7 @@ class PackageResource(ModelResource):
 
         return http.HttpResponse(
             report,
-            mimetype="application/json"
+            content_type="application/json"
         )
         return response
 
@@ -703,7 +703,7 @@ class PackageResource(ModelResource):
             }
             return http.ApplicationError(
                 json.dumps(response),
-                mimetype="application/json"
+                content_type="application/json"
             )
         else:
             return http.HttpNoContent()
