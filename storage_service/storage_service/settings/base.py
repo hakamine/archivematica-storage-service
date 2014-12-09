@@ -239,20 +239,74 @@ LOGGING = {
             '()': 'django.utils.log.RequireDebugFalse'
         }
     },
+    'formatters': {
+        'simple': {
+            'format': '%(levelname)-8s  %(name)s.%(funcName)s:  %(message)s',
+        },
+        'detailed': {
+            'format': '%(levelname)-8s  %(asctime)s  %(name)s:%(module)s:%(funcName)s:%(lineno)d:  %(message)s',
+            'datefmt': '%Y-%m-%d %H:%M:%S'
+        },
+    },
     'handlers': {
+        'null': {
+            'level': 'DEBUG',
+            'class': 'logging.NullHandler'
+        },
+        'console': {
+            'level': 'DEBUG',
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
         'mail_admins': {
             'level': 'ERROR',
             'filters': ['require_debug_false'],
             'class': 'django.utils.log.AdminEmailHandler'
-        }
+        },
+        'logfile': {
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': '/var/log/archivematica/storage_service.log',
+            'formatter': 'detailed',
+            'backupCount': 5,
+            'maxBytes': 20 * 1024 * 1024,  # 20 MiB
+        },
+        'verboselogfile': {
+            'level': 'DEBUG',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': '/var/log/archivematica/storage_service_debug.log',
+            'formatter': 'detailed',
+            'backupCount': 5,
+            'maxBytes': 100 * 1024 * 1024,  # 100 MiB
+        },
     },
     'loggers': {
+        'django': {
+            'handlers': ['null'],
+            'propagate': True,
+            'level': 'INFO',
+        },
         'django.request': {
             'handlers': ['mail_admins'],
             'level': 'ERROR',
             'propagate': True,
         },
-    }
+        'administration': {
+            'handlers': ['logfile', 'verboselogfile'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'common': {
+            'handlers': ['logfile', 'verboselogfile'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'locations': {
+            'handlers': ['logfile', 'verboselogfile'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+    },
 }
 ########## END LOGGING CONFIGURATION
 
