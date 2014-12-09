@@ -14,18 +14,20 @@ case "$1" in
 	  adduser --uid 333 --group --system --home /var/lib/archivematica/ archivematica
 	fi
 
-	if grep --quiet "DJANGO_SECRET_KEY=<replace-with-key>" /var/archivematica/.storage-service; then
+	if [ $# -lt 2 ]; then
+		if grep --quiet "DJANGO_SECRET_KEY=<replace-with-key>" /var/archivematica/.storage-service; then
 
-		echo "creating django secret key"
-		KEYCMD=$(python /var/archivematica/storage-service/make_key.py 2>&1)
-		echo $KEYCMD
+			echo "creating django secret key"
+			KEYCMD=$(python /var/archivematica/storage-service/make_key.py 2>&1)
+			echo $KEYCMD
 
-		sed -i "s/<replace-with-key>/\"$KEYCMD\"/g" /var/archivematica/.storage-service
-		sed -i "s/<replace-with-key>/\"$KEYCMD\"/g" /etc/uwsgi/apps-available/storage.ini
-	else
-		echo "django secret key already exists"
+			sed -i "s/<replace-with-key>/\"$KEYCMD\"/g" /var/archivematica/.storage-service
+			mv /var/archivematica/.storage-service /etc/archivematica/.storage-service			
+			sed -i "s/<replace-with-key>/\"$KEYCMD\"/g" /var/archivematica/storage.ini
+			mv /var/archivematica/storage.init /etc/uwsgi/apps-available/storage.ini
+		fi
 	fi
-	. /var/archivematica/.storage-service
+	. /etc/archivematica/.storage-service
 
     SSHOME=/usr/lib/archivematica/storage-service
 
