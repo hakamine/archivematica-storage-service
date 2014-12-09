@@ -1,43 +1,63 @@
 #!/bin/sh
 
-echo "creating archivematica user"
-userID=`id -u archivematica`
+set -e
 
-if [ "${userID}" = 333 ]; then
-  echo "User archivematica exists"
-else
-  adduser --uid 333 --group --system --home /var/lib/archivematica/ archivematica
-fi
+case "$1" in
+    configure)
 
+	echo "creating archivematica user"
+	userID=`id -u archivematica`
 
-echo "creating django secret key"
-KEYCMD=$(python /var/archivematica/storage-service/make_key.py 2>&1)
-echo $KEYCMD
+	if [ "${userID}" = 333 ]; then
+	  echo "User archivematica exists"
+	else
+	  adduser --uid 333 --group --system --home /var/lib/archivematica/ archivematica
+	fi
 
-sed -i "s/<replace-with-key>/\"$KEYCMD\"/g" /var/archivematica/.storage-service
-sed -i "s/<replace-with-key>/\"$KEYCMD\"/g" /etc/uwsgi/apps-available/storage.ini
+	if grep --quiet "DJANGO_SECRET_KEY=<replace-with-key>" /var/archivematica/.storage-service; then
 
-. /var/archivematica/.storage-service
+		echo "creating django secret key"
+		KEYCMD=$(python /var/archivematica/storage-service/make_key.py 2>&1)
+		echo $KEYCMD
 
-echo "creating symlink in /usr/lib/archivematica"
-ln -s /usr/share/python/archivematica-storage-service/lib/python2.7/site-packages/storage_service/ /usr/lib/archivematica/storage-service
-mv /var/archivematica/storage-service/static /usr/lib/archivematica/storage-service/static
-mv /var/archivematica/storage-service/templates /usr/lib/archivematica/storage-service/templates
+		sed -i "s/<replace-with-key>/\"$KEYCMD\"/g" /var/archivematica/.storage-service
+		sed -i "s/<replace-with-key>/\"$KEYCMD\"/g" /etc/uwsgi/apps-available/storage.ini
+	else
+		echo "django secret key already exists"
+	fi
+	. /var/archivematica/.storage-service
 
-cd /usr/lib/archivematica/storage-service
+    SSHOME=/usr/lib/archivematica/storage-service
 
-echo "configuring django database and static files"
-/usr/share/python/archivematica-storage-service/bin/python manage.py syncdb
-/usr/share/python/archivematica-storage-service/bin/python manage.py migrate
-/usr/share/python/archivematica-storage-service/bin/python manage.py collectstatic --noinput
+	rm -f $SSHOME
+	echo "creating symlink in /usr/lib/archivematica"
+	ln -s /usr/share/python/archivematica-storage-service/lib/python2.7/site-packages/storage_service/ $SSHOME
+	
+	echo "moving assets"
+	mkdir -p /usr/lib/archivematica/storage-service/static
+	cp -rf /var/archivematica/storage-service/static/* /usr/lib/archivematica/storage-service/static/
+	rm -rf /var/archivematica/storage-service/static
+	
+	mkdir -p /usr/lib/archivematica/storage-service/templates
+	cp -rf /var/archivematica/storage-service/templates/* /usr/lib/archivematica/storage-service/templates/
+	rm -rf /var/archivematica/storage-service/templates
+		
+	echo "configuring django database and static files"
+	cd /usr/lib/archivematica/storage-service
+	/usr/share/python/archivematica-storage-service/bin/python manage.py syncdb
+	/usr/share/python/archivematica-storage-service/bin/python manage.py migrate
+	/usr/share/python/archivematica-storage-service/bin/python manage.py collectstatic --noinput
 
+	echo "updating directory permissions"
+	chown -R archivematica:archivematica /var/archivematica/storage-service
+	chown -R archivematica:archivematica /var/archivematica/storage_service
+	chown -R archivematica:archivematica /var/archivematica/.storage-service
+	chown -R archivematica:archivematica /usr/share/python/archivematica-storage-service
+	chown -R archivematica:archivematica /var/log/archivematica
 
-echo "updating directory permissions"
-chown -R archivematica:archivematica /var/archivematica/storage-service
-chown -R archivematica:archivematica /var/archivematica/storage_service
-chown -R archivematica:archivematica /var/archivematica/.storage-service
-chown -R archivematica:archivematica /usr/share/python/archivematica-storage-service
+	rm -f /tmp/storage_service.log
 
-rm -f /tmp/storage_service.log
+    ;;
+esac 
 
 #DEBHELPER#
