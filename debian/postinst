@@ -35,6 +35,7 @@ echo "configuring django database and static files"
 echo "updating directory permissions"
 chown -R archivematica:archivematica /var/archivematica/
 chown -R archivematica:archivematica /usr/share/python/archivematica-storage-service
+chown -R archivematica:archivematica /var/log/archivematica
 
 rm -f /tmp/storage_service.log
 
