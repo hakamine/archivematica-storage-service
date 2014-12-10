@@ -15,18 +15,22 @@ case "$1" in
 	fi
 
 	if [ $# -lt 2 ]; then
-		if grep --quiet "DJANGO_SECRET_KEY=<replace-with-key>" /var/archivematica/.storage-service; then
+		#this is a fresh install, not an upgrade
+		echo "creating django secret key"
+		KEYCMD=$(python /var/archivematica/storage-service/make_key.py 2>&1)
+		echo $KEYCMD
 
-			echo "creating django secret key"
-			KEYCMD=$(python /var/archivematica/storage-service/make_key.py 2>&1)
-			echo $KEYCMD
-
-			sed -i "s/<replace-with-key>/\"$KEYCMD\"/g" /var/archivematica/.storage-service
-			mv /var/archivematica/.storage-service /etc/archivematica/.storage-service			
-			sed -i "s/<replace-with-key>/\"$KEYCMD\"/g" /var/archivematica/storage.ini
-			mv /var/archivematica/storage.init /etc/uwsgi/apps-available/storage.ini
-		fi
+		sed -i "s/<replace-with-key>/\"$KEYCMD\"/g" /var/archivematica/.storage-service
+		cp -f /var/archivematica/.storage-service /etc/archivematica/.storage-service			
+		sed -i "s/<replace-with-key>/\"$KEYCMD\"/g" /var/archivematica/storage.ini
+		cp -f /var/archivematica/storage.ini /etc/uwsgi/apps-available/storage.ini
 	fi
+
+	#remove temporary config templates now
+	rm -f /var/archivematica/.storage-service
+	rm -f /var/archivematica/storage.ini
+	rm -f /var/archivematica/make_key.py
+	
 	. /etc/archivematica/.storage-service
 
     SSHOME=/usr/lib/archivematica/storage-service
