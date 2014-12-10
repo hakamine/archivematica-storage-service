@@ -1,4 +1,8 @@
+import json
 import logging
+import os
+import requests
+from annoying.functions import get_object_or_None
 
 from django.contrib import auth, messages
 from django.core.urlresolvers import reverse
@@ -11,13 +15,12 @@ from django.views.decorators.csrf import csrf_exempt
 
 from common import decorators
 from common import utils
-from .models import Callback, Space, Location, Package, Event, Pipeline, LocationPipeline
+from .models import Callback, Space, Location, Package, Event, Pipeline, LocationPipeline, StorageException
 from . import forms
 from .constants import PROTOCOL
 
-logger = logging.getLogger(__name__)
-logging.basicConfig(#filename="/tmp/storage_service.log",
-    level=logging.INFO)
+LOGGER = logging.getLogger(__name__)
+
 
 ########################## HELPERS ##########################
 
@@ -44,43 +47,141 @@ def package_list(request):
     packages = Package.objects.all()
     return render(request, 'locations/package_list.html', locals())
 
+def aip_recover_request(request):
+    def execution_logic(aip): 
+        recover_location = LocationPipeline.objects.get(
+            pipeline=aip.origin_pipeline, location__purpose=Location.AIP_RECOVERY).location
+
+        try:
+            (success, failures, message) = aip.recover_aip(
+                recover_location, os.path.basename(aip.current_path))
+        except StorageException:
+            recover_path = os.path.join(recover_location.full_path(), os.path.basename(aip.full_path()))
+            message = 'error accessing restore files at {}'.format(recover_path)
+            success = False
+
+        return (success, message)
+
+    config = AIPRequestHandlerConfig()
+    config.event_type = Event.RECOVER
+    config.approved_status = Package.UPLOADED
+    config.reject_message = 'AIP restore rejected.'
+    config.execution_success_message = 'AIP restored.'
+    config.execution_fail_message = 'AIP restore failed'
+    config.execution_logic = execution_logic
+
+    return _handle_aip_request(request, config, 'aip_recover_request')
+
 def aip_delete_request(request):
-    requests = Event.objects.filter(status=Event.SUBMITTED).filter(
-        event_type=Event.DELETE)
+    def execution_logic(aip): 
+        return aip.delete_from_storage()
+
+    config = AIPRequestHandlerConfig()
+    config.event_type = Event.DELETE
+    config.approved_status = Package.DELETED
+    config.reject_message = 'Request rejected, package still stored.'
+    config.execution_success_message = 'Package deleted successfully.'
+    config.execution_fail_message = 'Package was not deleted from disk correctly'
+    config.execution_logic = execution_logic
+
+    return _handle_aip_request(request, config, 'aip_delete_request')
+
+def _handle_aip_request(request, config, view_name):
+    request_events = Event.objects.filter(status=Event.SUBMITTED).filter(
+        event_type=config.event_type)
+
     if request.method == 'POST':
         # FIXME won't scale with many pending deletes, since does linear search
         # on all the forms
-        for req in requests:
+        for req in request_events:
             req.form = forms.ConfirmEventForm(request.POST, prefix=str(req.id),
                 instance=req)
             if req.form.is_valid():
                 event = req.form.save()
                 event.status_reason = req.form.cleaned_data['status_reason']
                 event.admin_id = auth.get_user(request)
+
+                # Handle administrator decision and optionally notify remote REST endpoint
                 if 'reject' in request.POST:
                     event.status = Event.REJECTED
                     event.package.status = event.store_data
-                    messages.success(request, "Request rejected, package still stored.")
+                    notification_message = _handle_aip_request_remote_result_notification(config, event, False)
+                    if notification_message:
+                        config.reject_message += ' ' + notification_message
+                    messages.success(request, config.reject_message)
                 elif 'approve' in request.POST:
                     event.status = Event.APPROVED
-                    event.package.status = Package.DELETED
-                    success, err_msg = event.package.delete_from_storage()
+                    event.package.status = config.approved_status
+                    success, err_msg = config.execution_logic(event.package)
                     if not success:
-                        messages.error(request,
-                            "Package was not deleted from disk correctly: {}. Please contact an administrator or see logs for details".format(err_msg))
+                        error_message = "{}: {}. Please contact an administrator or see logs for details.".format(
+                            config.execution_fail_message, err_msg)
+                        notification_message = _handle_aip_request_remote_result_notification(config, event, False)
+                        if notification_message:
+                            error_message += ' ' + notification_message
+                        messages.error(request, error_message)
                     else:
-                        messages.success(request, "Request approved.  Package deleted successfully.")
+                        approval_message = "Request approved. {}".format(config.execution_success_message)
+                        notification_message = _handle_aip_request_remote_result_notification(config, event, True)
+                        if notification_message:
+                            approval_message += ' ' + notification_message
+                        messages.success(request, approval_message)
                         if err_msg:
                             messages.info(request, err_msg)
+
                 event.save()
                 event.package.save()
-                return redirect('aip_delete_request')
+                return redirect(view_name)
     else:
-        for req in requests:
+        for req in request_events:
             req.form = forms.ConfirmEventForm(prefix=str(req.id), instance=req)
+
     closed_requests = Event.objects.filter(
         Q(status=Event.APPROVED) | Q(status=Event.REJECTED))
-    return render(request, 'locations/aip_delete_request.html', locals())
+
+    return render(request, 'locations/aip_request.html', locals())
+
+def _handle_aip_request_remote_result_notification(config, event, success):
+    response_message = None
+
+    # Setting name is determined using event type
+    setting_prefix = "{}_request_notification".format(config.event_type.lower())
+    request_notification_url = utils.get_setting("{}_url".format(setting_prefix))
+
+    # If notification is configured, attempt
+    if request_notification_url != None:
+        headers = {"Content-type": "application/json"}
+
+        # Status reported may be approved, yet failed during execution
+        status_to_report = event.status
+        if event.status == Event.APPROVED and not success:
+            status_to_report += ' (failed)'
+
+        # Serialize payload
+        payload = json.dumps({
+            "event_id": event.id,
+            "message": "{}: {}".format(status_to_report, event.status_reason),
+            "success": success
+        })
+
+        # Specify basic authentication, if configured
+        request_notification_auth_username = utils.get_setting("{}_auth_username".format(setting_prefix))
+        request_notification_auth_password = utils.get_setting("{}_auth_password".format(setting_prefix))
+
+        if request_notification_auth_username != None:
+            auth = requests.auth.HTTPBasicAuth(request_notification_auth_username, request_notification_auth_password)
+        else:
+            auth = None
+
+        # Make request and set response message, if included in notification request response body
+        notification_response = requests.post(request_notification_url, auth=auth, data=payload, headers=headers)
+        try:
+            responseData = json.loads(notification_response.content)
+            response_message = responseData['message']
+        except ValueError:
+            pass
+
+    return response_message
 
 def package_update_status(request, uuid):
     package = Package.objects.get(uuid=uuid)
@@ -89,7 +190,7 @@ def package_update_status(request, uuid):
     try:
         (new_status, error) = package.current_location.space.update_package_status(package)
     except Exception:
-        logging.exception('update status')
+        LOGGER.exception('update status')
         new_status = None
         error = 'Error getting status for package {}'.format(uuid)
 
@@ -107,6 +208,16 @@ def package_update_status(request, uuid):
     next_url = request.GET.get('next', reverse('package_list'))
     return redirect(next_url)
 
+class AIPRequestHandlerConfig:
+    event_type = ''                # Event type being handled
+    approved_status = ''           # Event status, if approved
+    reject_message = ''            # Message returned if not approved
+    execution_success_message = '' # Message returned if execution success
+    execution_fail_message = ''    # Message returned if execution failed
+
+    def execution_logic(package):  # Logic performed on package if approved
+        pass
+
 
 ########################## LOCATIONS ##########################
 
@@ -122,22 +233,33 @@ def location_edit(request, space_uuid, location_uuid=None):
     if form.is_valid():
         location = form.save(commit=False)
         location.space = space
-        location.save()
-        # Cannot use form.save_m2m() becuase of 'through' table
-        for pipeline in form.cleaned_data['pipeline']:
-            LocationPipeline.objects.get_or_create(
-                location=location, pipeline=pipeline)
-        # Delete relationships between the location and pipelines not in the form
-        to_delete = LocationPipeline.objects.filter(location=location).exclude(
-            pipeline__in=list(form.cleaned_data['pipeline']))
-        # NOTE Need to convert form.cleaned_data['pipeline'] to a list, or the
-        # SQL generated by pipeline__in is garbage.  Django 1.5
-        logging.debug("LocationPipeline to delete: {}".format(to_delete))
-        to_delete.delete()
-        messages.success(request, "Location saved.")
-        # TODO make this return to the originating page
-        # http://stackoverflow.com/questions/4203417/django-how-do-i-redirect-to-page-where-form-originated
-        return redirect('location_detail', location.uuid)
+        # Don't allow more than one recovery location per pipeline
+        if location.purpose == Location.AIP_RECOVERY:
+            for pipeline in form.cleaned_data['pipeline']:
+                existing_pipeline_recovery_location = get_object_or_None(LocationPipeline,
+                    pipeline=pipeline, location__purpose=Location.AIP_RECOVERY)
+                if existing_pipeline_recovery_location:
+                    messages.warning(request, "Pipeline {} already has an AIP recovery location,".format(pipeline.uuid))
+                    location = None
+
+        if location:
+            location.save()
+            # Cannot use form.save_m2m() because of 'through' table
+            for pipeline in form.cleaned_data['pipeline']:
+                LocationPipeline.objects.get_or_create(
+                    location=location, pipeline=pipeline)
+
+            # Delete relationships between the location and pipelines not in the form
+            to_delete = LocationPipeline.objects.filter(location=location).exclude(
+                pipeline__in=list(form.cleaned_data['pipeline']))
+            # NOTE Need to convert form.cleaned_data['pipeline'] to a list, or the
+            # SQL generated by pipeline__in is garbage.  Django 1.5
+            LOGGER.debug("LocationPipeline to delete: %s", to_delete)
+            to_delete.delete()
+            messages.success(request, "Location saved.")
+            # TODO make this return to the originating page
+            # http://stackoverflow.com/questions/4203417/django-how-do-i-redirect-to-page-where-form-originated
+            return redirect('location_detail', location.uuid)
     return render(request, 'locations/location_form.html', locals())
 
 def location_list(request):

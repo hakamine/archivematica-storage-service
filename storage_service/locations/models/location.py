@@ -1,4 +1,5 @@
 # stdlib, alphabetical
+import logging
 import os
 
 # Core Django, alphabetical
@@ -14,6 +15,8 @@ from managers import Enabled
 
 __all__ = ('Location', 'LocationPipeline')
 
+LOGGER = logging.getLogger(__name__)
+
 
 class Location(models.Model):
     """ Stores information about a location. """
@@ -23,6 +26,7 @@ class Location(models.Model):
     space = models.ForeignKey('Space', to_field='uuid')
 
     # Sorted by display name
+    AIP_RECOVERY = 'AR'
     AIP_STORAGE = 'AS'
     CURRENTLY_PROCESSING = 'CP'
     DIP_STORAGE = 'DS'
@@ -33,6 +37,7 @@ class Location(models.Model):
     TRANSFER_SOURCE = 'TS'
 
     PURPOSE_CHOICES = (
+        (AIP_RECOVERY, 'AIP Recovery'),
         (AIP_STORAGE, 'AIP Storage'),
         (CURRENTLY_PROCESSING, 'Currently Processing'),
         (DIP_STORAGE, 'DIP Storage'),

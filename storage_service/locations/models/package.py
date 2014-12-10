@@ -25,6 +25,8 @@ from space import Space
 
 __all__ = ('Package', )
 
+LOGGER = logging.getLogger(__name__)
+
 
 class Package(models.Model):
     """ A package stored in a specific location. """
@@ -63,6 +65,7 @@ class Package(models.Model):
     VERIFIED = 'VERIFIED'
     DEL_REQ = 'DEL_REQ'
     DELETED = 'DELETED'
+    RECOVER_REQ = 'RECOVER_REQ'
     FAIL = 'FAIL'
     FINALIZED = 'FINALIZE'
     STATUS_CHOICES = (
@@ -89,6 +92,7 @@ class Package(models.Model):
 
     PACKAGE_TYPE_CAN_DELETE = (AIP, AIC, TRANSFER)
     PACKAGE_TYPE_CAN_EXTRACT = (AIP, AIC)
+    PACKAGE_TYPE_CAN_RECOVER = (AIP)
 
     # Compression options
     COMPRESSION_7Z_BZIP = '7z with bzip'
@@ -160,7 +164,7 @@ class Package(models.Model):
             # self.pointer_root.find("mets:structMap/*/mets:div[@ORDER='{}']".format(lockss_au_number), namespaces=NSMAP)
             path = os.path.splitext(full_path)[0] + '.tar-' + str(lockss_au_number)
         else:  # LOCKSS AU number specified, but not a LOCKSS package
-            logging.warning('Trying to download LOCKSS chunk for a non-LOCKSS package.')
+            LOGGER.warning('Trying to download LOCKSS chunk for a non-LOCKSS package.')
             path = full_path
         return path
 
@@ -283,6 +287,78 @@ class Package(models.Model):
         location.used += self.size
         location.save()
 
+    def recover_aip(self, origin_location, origin_path):
+        """ Recovers an AIP using files at a given location.
+
+        Creates a temporary package associated with recovery AIP files within
+        a space. Does fixity check on recovery AIP package. Makes backup of
+        AIP files being replaced by recovery files. Replaces AIP files with
+        recovery files.
+        """
+
+        # Create temporary AIP package
+        temp_aip = Package()
+        temp_aip.package_type = 'AIP'
+        temp_aip.origin_pipeline = self.origin_pipeline
+        temp_aip.current_location = origin_location
+        temp_aip.current_path = origin_path
+        temp_aip.save()
+
+        # Check integrity of temporary AIP package
+        (success, failures, message) = temp_aip.check_fixity()
+
+        # If the recovered AIP doesn't pass check, delete and return error info
+        if not success:
+            temp_aip.delete()
+            return (success, failures, message)
+
+        origin_space = temp_aip.current_location.space
+        destination_space = self.current_location.space
+
+        # Copy corrupt files to storage service staging
+        source_path = os.path.join(
+            self.current_location.relative_path,
+            self.current_path)
+        destination_path = os.path.join(
+            origin_location.relative_path,
+            'backup')
+
+        origin_space.move_to_storage_service(
+            source_path=source_path,
+            destination_path=destination_path,
+            destination_space=destination_space)
+        origin_space.post_move_to_storage_service()
+
+        # Copy corrupt files from staging to backup directory
+        destination_space.move_from_storage_service(
+            source_path=destination_path,
+            destination_path=destination_path)
+        destination_space.post_move_from_storage_service()
+
+        # Copy recovery files to storage service staging
+        source_path = os.path.join(
+            temp_aip.current_location.relative_path, origin_path)
+        destination_path = os.path.join(
+            self.current_location.relative_path,
+            os.path.dirname(self.current_path))
+
+        origin_space.move_to_storage_service(
+            source_path=source_path,
+            destination_path=destination_path,
+            destination_space=destination_space)
+        origin_space.post_move_to_storage_service()
+
+        # Copy recovery files from staging to AIP store
+        destination_space.move_from_storage_service(
+            source_path=destination_path,
+            destination_path=destination_path)
+        destination_space.post_move_from_storage_service()
+
+        temp_aip.delete()
+
+        # Do fixity check of AIP with recovered files
+        return self.check_fixity() 
+
     def store_aip(self, origin_location, origin_path):
         """ Stores an AIP in the correct Location.
 
@@ -325,7 +401,7 @@ class Package(models.Model):
                 src_space.move_to_storage_service(pointer_file_src, self.pointer_file_path, self.pointer_file_location.space)
                 self.pointer_file_location.space.move_from_storage_service(self.pointer_file_path, pointer_file_dst)
             except:
-                logging.warning("No pointer file found")
+                LOGGER.warning("No pointer file found")
                 self.pointer_file_location = None
                 self.pointer_file_path = None
                 self.save()
@@ -402,12 +478,12 @@ class Package(models.Model):
             if relative_path:
                 command.append(relative_path)
 
-            logging.info('Extracting file with: {} to {}'.format(command, output_path))
+            LOGGER.info('Extracting file with: %s to %s', command, output_path)
             rc = subprocess.call(command)
-            logging.debug('Extract file RC: %s', rc)
+            LOGGER.debug('Extract file RC: %s', rc)
         else:
             aip_path = os.path.join(full_path, basename)
-            logging.info('Copying AIP from: {} to {}'.format(aip_path, output_path))
+            LOGGER.info('Copying AIP from: %s to %s', aip_path, output_path)
             shutil.copytree(aip_path, output_path)
 
         if not relative_path:
@@ -477,9 +553,9 @@ class Package(models.Model):
         else:
             raise NotImplementedError('Algorithm %s not implemented' % algorithm)
 
-        logging.info('Compressing package with: {} to {}'.format(command, compressed_filename))
+        LOGGER.info('Compressing package with: %s to %s', command, compressed_filename)
         rc = subprocess.call(command)
-        logging.debug('Extract file RC: %s', rc)
+        LOGGER.debug('Extract file RC: %s', rc)
 
         return (compressed_filename, extract_path)
 
@@ -595,7 +671,7 @@ class Package(models.Model):
             try:
                 os.remove(pointer_path)
             except OSError as e:
-                logging.info("Error deleting pointer file %s for package %s", pointer_path, self.uuid, exc_info=True)
+                LOGGER.info("Error deleting pointer file %s for package %s", pointer_path, self.uuid, exc_info=True)
             utils.removedirs(os.path.dirname(self.pointer_file_path),
                 base=self.pointer_file_location.full_path)
 
