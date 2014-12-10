@@ -24,9 +24,15 @@ case "$1" in
 			sed -i "s/<replace-with-key>/\"$KEYCMD\"/g" /var/archivematica/.storage-service
 			mv /var/archivematica/.storage-service /etc/archivematica/.storage-service			
 			sed -i "s/<replace-with-key>/\"$KEYCMD\"/g" /var/archivematica/storage.ini
-			mv /var/archivematica/storage.init /etc/uwsgi/apps-available/storage.ini
+			mv /var/archivematica/storage.ini /etc/uwsgi/apps-available/storage.ini
 		fi
+	else
+		#this is an upgrade (not a fresh install, so we don't have to modify config files)
+		rm /var/archivematica/.storage-service
+		rm /var/archiveamtica/storage.ini
 	fi
+	rm /var/archivematica/make_key.py
+	
 	. /etc/archivematica/.storage-service
 
     SSHOME=/usr/lib/archivematica/storage-service
