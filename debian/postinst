@@ -55,7 +55,9 @@ case "$1" in
 	/usr/share/python/archivematica-storage-service/bin/python manage.py collectstatic --noinput
 
 	echo "updating directory permissions"
-	chown -R archivematica:archivematica /var/archivematica/
+	chown -R archivematica:archivematica /var/archivematica/storage-service
+	chown -R archivematica:archivematica /var/archivematica/storage_service
+	chown -R archivematica:archivematica /var/archivematica/.storage-service
 	chown -R archivematica:archivematica /usr/share/python/archivematica-storage-service
 	chown -R archivematica:archivematica /var/log/archivematica
 
